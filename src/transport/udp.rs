@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::str;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
+use futures_util::{SinkExt, StreamExt};
 use futures_util::sink::SinkMapErr;
 use futures_util::stream::{Map, SplitSink};
-use futures_util::{SinkExt, StreamExt};
-use pin_project_lite::pin_project;
 use sender_sink::wrappers::{SinkError, UnboundedSenderSink};
-use tokio::io::{copy_bidirectional, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::copy_bidirectional;
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -48,7 +45,6 @@ impl UdpServer {
 
         {
             let stop_token = stop_token.clone();
-            let task_tracker = task_tracker.clone();
             let dispatchers = dispatchers.clone();
 
             task_tracker.spawn(Self::run(stop_token, socket, dispatchers, client));
@@ -171,7 +167,7 @@ impl UdpClient {
         Ok(Self { addr })
     }
 
-    pub async fn connect(&self) -> Result<UdpStream> {
+    pub async fn connect(&self) -> Result<UdpClientStream> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         let framed = UdpFramed::new(socket, BytesCodec::new());
         let (sink, stream) = framed.split::<(Bytes, SocketAddr)>();
@@ -179,9 +175,7 @@ impl UdpClient {
         let reader: UdpClientStreamReader =
             StreamReader::new(stream.map(|item| item.map(|(bytes, _)| bytes)));
 
-        Ok(UdpStream::UdpClientStream {
-            stream: UdpClientStream::new(reader, writer),
-        })
+        Ok(UdpClientStream::new(reader, writer))
     }
 }
 
@@ -195,77 +189,4 @@ type UdpClientStreamReader = StreamReader<
     BytesMut,
 >;
 
-type UdpClientStream = AsyncReadWrite<UdpClientStreamReader, UdpClientStreamWriter>;
-
-pin_project! {
-    #[project = UdpStreamProj]
-    pub enum UdpStream {
-        UdpServerStream{ #[pin] stream: UdpServerStream },
-        UdpClientStream{ #[pin] stream: UdpClientStream }
-    }
-}
-
-impl AsyncRead for UdpStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        match self.project() {
-            UdpStreamProj::UdpServerStream { stream } => AsyncRead::poll_read(stream, cx, buf),
-            UdpStreamProj::UdpClientStream { stream } => AsyncRead::poll_read(stream, cx, buf),
-        }
-    }
-}
-
-impl AsyncWrite for UdpStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        match self.project() {
-            UdpStreamProj::UdpServerStream { stream } => AsyncWrite::poll_write(stream, cx, buf),
-            UdpStreamProj::UdpClientStream { stream } => AsyncWrite::poll_write(stream, cx, buf),
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.project() {
-            UdpStreamProj::UdpServerStream { stream } => AsyncWrite::poll_flush(stream, cx),
-            UdpStreamProj::UdpClientStream { stream } => AsyncWrite::poll_flush(stream, cx),
-        }
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        match self.project() {
-            UdpStreamProj::UdpServerStream { stream } => AsyncWrite::poll_shutdown(stream, cx),
-            UdpStreamProj::UdpClientStream { stream } => AsyncWrite::poll_shutdown(stream, cx),
-        }
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        match self.project() {
-            UdpStreamProj::UdpServerStream { stream } => {
-                AsyncWrite::poll_write_vectored(stream, cx, bufs)
-            }
-            UdpStreamProj::UdpClientStream { stream } => {
-                AsyncWrite::poll_write_vectored(stream, cx, bufs)
-            }
-        }
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        match self {
-            Self::UdpServerStream { stream } => AsyncWrite::is_write_vectored(stream),
-            Self::UdpClientStream { stream } => AsyncWrite::is_write_vectored(stream),
-        }
-    }
-}
+pub type UdpClientStream = AsyncReadWrite<UdpClientStreamReader, UdpClientStreamWriter>;

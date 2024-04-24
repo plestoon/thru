@@ -24,7 +24,6 @@ impl TcpServer {
 
         {
             let stop_token = stop_token.clone();
-            let task_tracker = task_tracker.clone();
             task_tracker.spawn(Self::run(stop_token, listener, client));
         }
 

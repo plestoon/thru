@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use crate::config::Config;
 use crate::transport::quic::{QuicClient, QuicServer, QuicStream};
 use crate::transport::tcp::{TcpClient, TcpServer};
-use crate::transport::udp::{UdpClient, UdpServer, UdpStream};
+use crate::transport::udp::{UdpClient, UdpClientStream, UdpServer};
 use crate::tunnel::{Tunnel, TunnelEndpoint};
 
 mod quic;
@@ -40,7 +40,7 @@ pin_project! {
     #[project = TransportProj]
     pub enum Transport {
         TcpTransport {#[pin] transport: TcpStream},
-        UdpTransport {#[pin] transport: UdpStream},
+        UdpClientTransport {#[pin] transport: UdpClientStream},
         QuicTransport {#[pin] transport: QuicStream}
     }
 }
@@ -53,7 +53,7 @@ impl AsyncRead for Transport {
     ) -> Poll<std::io::Result<()>> {
         match self.project() {
             TransportProj::TcpTransport { transport } => AsyncRead::poll_read(transport, cx, buf),
-            TransportProj::UdpTransport { transport } => {
+            TransportProj::UdpClientTransport { transport } => {
                 AsyncRead::poll_read(transport, cx, buf)
             }
             TransportProj::QuicTransport { transport } => AsyncRead::poll_read(transport, cx, buf),
@@ -69,7 +69,7 @@ impl AsyncWrite for Transport {
     ) -> Poll<std::io::Result<usize>> {
         match self.project() {
             TransportProj::TcpTransport { transport } => AsyncWrite::poll_write(transport, cx, buf),
-            TransportProj::UdpTransport { transport } => {
+            TransportProj::UdpClientTransport { transport } => {
                 AsyncWrite::poll_write(transport, cx, buf)
             }
             TransportProj::QuicTransport { transport } => {
@@ -81,7 +81,7 @@ impl AsyncWrite for Transport {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.project() {
             TransportProj::TcpTransport { transport } => AsyncWrite::poll_flush(transport, cx),
-            TransportProj::UdpTransport { transport } => {
+            TransportProj::UdpClientTransport { transport } => {
                 AsyncWrite::poll_flush(transport, cx)
             }
             TransportProj::QuicTransport { transport } => AsyncWrite::poll_flush(transport, cx),
@@ -94,7 +94,7 @@ impl AsyncWrite for Transport {
     ) -> Poll<Result<(), std::io::Error>> {
         match self.project() {
             TransportProj::TcpTransport { transport } => AsyncWrite::poll_shutdown(transport, cx),
-            TransportProj::UdpTransport { transport } => {
+            TransportProj::UdpClientTransport { transport } => {
                 AsyncWrite::poll_shutdown(transport, cx)
             }
             TransportProj::QuicTransport { transport } => AsyncWrite::poll_shutdown(transport, cx),
@@ -110,7 +110,7 @@ impl AsyncWrite for Transport {
             TransportProj::TcpTransport { transport } => {
                 AsyncWrite::poll_write_vectored(transport, cx, bufs)
             }
-            TransportProj::UdpTransport { transport } => {
+            TransportProj::UdpClientTransport { transport } => {
                 AsyncWrite::poll_write_vectored(transport, cx, bufs)
             }
             TransportProj::QuicTransport { transport } => {
@@ -122,7 +122,7 @@ impl AsyncWrite for Transport {
     fn is_write_vectored(&self) -> bool {
         match self {
             Self::TcpTransport { transport } => AsyncWrite::is_write_vectored(transport),
-            Self::UdpTransport { transport } => AsyncWrite::is_write_vectored(transport),
+            Self::UdpClientTransport { transport } => AsyncWrite::is_write_vectored(transport),
             Self::QuicTransport { transport } => AsyncWrite::is_write_vectored(transport),
         }
     }
@@ -184,7 +184,7 @@ impl TransportClient {
             Self::TcpClient(client) => Ok(Transport::TcpTransport {
                 transport: client.connect().await?,
             }),
-            Self::UdpClient(client) => Ok(Transport::UdpTransport {
+            Self::UdpClient(client) => Ok(Transport::UdpClientTransport {
                 transport: client.connect().await?,
             }),
             Self::QuicClient(client) => Ok(Transport::QuicTransport {
