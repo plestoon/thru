@@ -46,12 +46,12 @@ impl TcpServer {
                 result = listener.accept() => {
                     let (stream, _) = result?;
                     let client = client.clone();
-                    tokio::spawn(async move {
-                        Self::handle_stream(stream, client).await
-                    });
+                    tokio::spawn(Self::handle_stream(stream, client));
                 }
             }
         }
+
+        client.disconnect().await;
 
         Ok(())
     }

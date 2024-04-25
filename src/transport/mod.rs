@@ -192,4 +192,11 @@ impl TransportClient {
             }),
         }
     }
+
+    async fn disconnect(&self) {
+        match self {
+            Self::QuicClient(client) => client.disconnect().await,
+            _ => {}
+        }
+    }
 }

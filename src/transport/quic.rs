@@ -81,15 +81,15 @@ impl QuicServer {
                 conn = endpoint.accept() => {
                     let conn = conn.ok_or(anyhow!("not accepting connections"))?.await?;
                     let client = client.clone();
-                    tokio::spawn(async move {
-                        let _ = Self::handle_connection(conn, client).await;
-                    });
+                    tokio::spawn(Self::handle_connection(conn, client));
                 }
             }
         }
 
         endpoint.close(VarInt::from(255u8), b"server stopped");
         endpoint.wait_idle().await;
+
+        client.disconnect().await;
 
         Ok(())
     }
@@ -99,9 +99,7 @@ impl QuicServer {
             let (send, recv) = connection.accept_bi().await?;
             let stream = QuicStream::new(recv, send);
             let client = client.clone();
-            tokio::spawn(async move {
-                let _ = Self::handle_stream(stream, client).await;
-            });
+            tokio::spawn(Self::handle_stream(stream, client));
         }
     }
 
@@ -121,6 +119,7 @@ impl QuicServer {
 
 #[derive(Debug, Clone)]
 pub struct QuicClient {
+    endpoint: Endpoint,
     connection: Connection,
 }
 
@@ -140,20 +139,21 @@ impl QuicClient {
         endpoint.set_default_client_config(config);
         let connection = endpoint.connect(addr, host)?.await?;
 
-        {
-            let connection = connection.clone();
-            tokio::spawn(async move {
-                let error = connection.closed().await;
-                println!("{}", error)
-            });
-        }
-
-        Ok(Self { connection })
+        Ok(Self {
+            endpoint,
+            connection,
+        })
     }
 
     pub async fn connect(&self) -> Result<QuicStream> {
         let (send, recv) = self.connection.open_bi().await?;
 
         Ok(QuicStream::new(recv, send))
+    }
+
+    pub async fn disconnect(&self) {
+        self.endpoint
+            .close(VarInt::from(255u8), b"client disconnected");
+        self.endpoint.wait_idle().await;
     }
 }

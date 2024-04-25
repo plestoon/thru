@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
-use futures_util::{SinkExt, StreamExt};
 use futures_util::sink::SinkMapErr;
 use futures_util::stream::{Map, SplitSink};
+use futures_util::{SinkExt, StreamExt};
 use sender_sink::wrappers::{SinkError, UnboundedSenderSink};
 use tokio::io::copy_bidirectional;
 use tokio::net::{lookup_host, UdpSocket};
@@ -77,6 +77,8 @@ impl UdpServer {
             }
         }
 
+        client.disconnect().await;
+
         Ok(())
     }
 
@@ -105,9 +107,7 @@ impl UdpServer {
                 StreamReader::new(UnboundedReceiverStream::from(accept_rx).map(|bytes| Ok(bytes)));
             let stream = UdpServerStream::new(reader, writer);
 
-            tokio::spawn(async move {
-                let _ = Self::handle_stream(stream, client).await;
-            });
+            tokio::spawn(Self::handle_stream(stream, client));
 
             {
                 let socket = socket.clone();
