@@ -221,6 +221,9 @@ impl QuicClient {
     pub async fn disconnect(&self) {
         self.endpoint
             .close(VarInt::from(255u8), b"client disconnected");
+
+        // This takes a little bit longer while retrying.
+        // https://github.com/quinn-rs/quinn/issues/1102
         self.endpoint.wait_idle().await;
     }
 }
