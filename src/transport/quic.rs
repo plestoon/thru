@@ -11,6 +11,8 @@ use quinn::{
 use tokio::io::copy_bidirectional;
 use tokio::net::lookup_host;
 use tokio::select;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -120,16 +122,11 @@ impl QuicServer {
 #[derive(Debug, Clone)]
 pub struct QuicClient {
     endpoint: Endpoint,
-    connection: Connection,
+    connection: Arc<Mutex<Option<Connection>>>,
 }
 
 impl QuicClient {
     pub async fn new(remote_addr: &str, app_config: &Config) -> Result<Self> {
-        let (host, _) = remote_addr.split_once(':').unwrap();
-        let addr = lookup_host(remote_addr)
-            .await?
-            .find(|addr| addr.is_ipv4())
-            .unwrap();
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
         let mut config = ClientConfig::with_native_roots();
         let mut transport_config = TransportConfig::default();
@@ -137,7 +134,22 @@ impl QuicClient {
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
         config.transport_config(Arc::new(transport_config));
         endpoint.set_default_client_config(config);
-        let connection = endpoint.connect(addr, host)?.await?;
+
+        let connection = Arc::new(Mutex::new(None));
+
+        {
+            let connection = connection.clone();
+            let app_config = app_config.clone();
+            let endpoint = endpoint.clone();
+            let remote_addr = remote_addr.to_owned();
+
+            tokio::spawn(Self::monitor_connection(
+                connection,
+                app_config,
+                endpoint,
+                remote_addr,
+            ));
+        }
 
         Ok(Self {
             endpoint,
@@ -145,8 +157,63 @@ impl QuicClient {
         })
     }
 
+    async fn new_connection(endpoint: &Endpoint, remote_addr: &str) -> Result<Connection> {
+        let (host, _) = remote_addr.split_once(':').unwrap();
+        let remote_addr = lookup_host(remote_addr)
+            .await?
+            .find(|addr| addr.is_ipv4())
+            .unwrap();
+        let connection = endpoint.connect(remote_addr, host)?.await?;
+
+        Ok(connection)
+    }
+
+    async fn recover(app_config: &Config, endpoint: &Endpoint, remote_addr: &str) -> Connection {
+        loop {
+            let connection = Self::new_connection(endpoint, remote_addr).await.ok();
+
+            if let Some(conn) = connection {
+                break conn;
+            }
+
+            sleep(app_config.quic_retry_interval).await;
+        }
+    }
+
+    async fn monitor_connection(
+        connection_lock: Arc<Mutex<Option<Connection>>>,
+        app_config: Config,
+        endpoint: Endpoint,
+        remote_addr: String,
+    ) {
+        loop {
+            let connection = {
+                let connection = connection_lock.lock().await;
+                connection.clone()
+            };
+
+            let new_connection = match connection {
+                Some(conn) => {
+                    conn.closed().await;
+                    sleep(app_config.quic_retry_interval).await;
+                    Self::recover(&app_config, &endpoint, &remote_addr).await
+                }
+                None => Self::recover(&app_config, &endpoint, &remote_addr).await,
+            };
+
+            let mut connection = connection_lock.lock().await;
+            *connection = Some(new_connection);
+        }
+    }
+
     pub async fn connect(&self) -> Result<QuicStream> {
-        let (send, recv) = self.connection.open_bi().await?;
+        let connection = {
+            let connection = self.connection.lock().await;
+            connection.clone()
+        };
+
+        let connection = connection.ok_or(anyhow!("connection not established"))?;
+        let (send, recv) = connection.open_bi().await?;
 
         Ok(QuicStream::new(recv, send))
     }
