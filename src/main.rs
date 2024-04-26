@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use tokio::signal::ctrl_c;
+use tokio::select;
+use tokio::signal::unix::{signal, SignalKind};
 
 use thru::config::Config;
 use thru::transport::TransportServer;
@@ -35,7 +36,12 @@ async fn main() -> Result<()> {
     let tunnel = parse_tunnel(&args.tunnel).await?;
     let server = TransportServer::start(&tunnel, &config).await?;
 
-    ctrl_c().await.unwrap();
+    let mut sigint = signal(SignalKind::interrupt()).unwrap();
+    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+    select! {
+        _ = sigint.recv() => {},
+        _ = sigterm.recv() => {}
+    }
 
     server.stop().await;
 
