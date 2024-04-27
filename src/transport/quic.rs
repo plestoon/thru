@@ -49,10 +49,15 @@ impl QuicServer {
         )?);
         let mut keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
         let key = rustls::PrivateKey(keys.remove(0));
+
         let mut config = ServerConfig::with_single_cert(certs, key)?;
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
+        transport_config.stream_receive_window(
+            VarInt::from_u64(app_config.quic_stream_receive_window).unwrap(),
+        );
+        transport_config.send_window(app_config.quic_send_window);
         config.transport_config(Arc::new(transport_config));
         let endpoint = Endpoint::server(config, tunnel.from.addr.parse::<SocketAddr>().unwrap())?;
         let client = TransportClient::new(&tunnel.to, &app_config).await?;
@@ -132,6 +137,10 @@ impl QuicClient {
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
+        transport_config.stream_receive_window(
+            VarInt::from_u64(app_config.quic_stream_receive_window).unwrap(),
+        );
+        transport_config.send_window(app_config.quic_send_window);
         config.transport_config(Arc::new(transport_config));
         endpoint.set_default_client_config(config);
 
