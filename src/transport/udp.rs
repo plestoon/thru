@@ -86,13 +86,15 @@ impl UdpServer {
         buf: &[u8],
         socket: Arc<UdpSocket>,
         peer_addr: SocketAddr,
-        dispatchers: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
+        dispatchers_lock: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
         client: TransportClient,
     ) {
         let buf = Bytes::copy_from_slice(buf);
-        let mut dispatchers = dispatchers.lock().unwrap();
+        let mut dispatchers = dispatchers_lock.lock().unwrap();
         if let Some(dispatcher) = dispatchers.get(&peer_addr) {
-            dispatcher.send(buf).unwrap(); // TODO
+            if dispatcher.send(buf).is_err() {
+                dispatchers.remove(&peer_addr);
+            }
         } else {
             let (dispatcher_tx, accept_rx) = unbounded_channel::<Bytes>();
             let (accept_tx, mut dispatcher_rx) = unbounded_channel::<Bytes>();
@@ -111,12 +113,22 @@ impl UdpServer {
 
             {
                 let socket = socket.clone();
+                let dispatchers_lock = dispatchers_lock.clone();
 
                 tokio::spawn(async move {
                     loop {
-                        let buf = dispatcher_rx.recv().await.unwrap(); // TODO
-                        socket.send_to(&buf, peer_addr).await.unwrap(); // TODO
+                        match dispatcher_rx.recv().await {
+                            Some(buf) => {
+                                if socket.send_to(&buf, peer_addr).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
                     }
+
+                    let mut dispatchers = dispatchers_lock.lock().unwrap();
+                    dispatchers.remove(&peer_addr);
                 });
             }
         }
@@ -154,7 +166,7 @@ type UdpServerStream = AsyncReadWrite<UdpServerStreamReader, UdpServerStreamWrit
 
 #[derive(Debug, Clone)]
 pub struct UdpClient {
-    addr: SocketAddr, // TODO: resolve dns on recovery
+    addr: SocketAddr,
 }
 
 impl UdpClient {
