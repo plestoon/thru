@@ -111,7 +111,7 @@ impl UdpServer {
             ));
             let reader: UdpServerStreamReader = IdleTimeoutRead::new(
                 StreamReader::new(UnboundedReceiverStream::from(accept_rx).map(|bytes| Ok(bytes))),
-                config.udp_max_idle_timeout.as_secs(),
+                config.udp_max_idle_timeout,
             );
             let stream = UdpServerStream::new(reader, writer);
 
@@ -195,7 +195,7 @@ impl UdpClient {
         let writer: UdpClientStreamWriter = SinkWriter::new(CopyToUdpFrame::new(sink, self.addr));
         let reader: UdpClientStreamReader = IdleTimeoutRead::new(
             StreamReader::new(stream.map(|item| item.map(|(bytes, _)| bytes))),
-            self.config.udp_max_idle_timeout.as_secs(),
+            self.config.udp_max_idle_timeout,
         );
 
         Ok(UdpClientStream::new(reader, writer))
