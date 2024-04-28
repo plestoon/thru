@@ -15,7 +15,7 @@ pub struct IdleTimeoutRead<T> {
 
 impl<T> IdleTimeoutRead<T>
 where
-    T: AsyncRead + Unpin + 'static,
+    T: AsyncRead + Unpin,
 {
     pub fn new(inner: T, timeout: Duration) -> Self {
         Self {

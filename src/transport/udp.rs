@@ -12,7 +12,7 @@ use sender_sink::wrappers::{SinkError, UnboundedSenderSink};
 use tokio::io::copy_bidirectional;
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::select;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::codec::BytesCodec;
 use tokio_util::io::{CopyToBytes, SinkWriter, StreamReader};
@@ -33,7 +33,6 @@ const MAX_DATAGRAM_SIZE: usize = 65_507;
 pub struct UdpServer {
     stop_token: CancellationToken,
     task_tracker: TaskTracker,
-    dispatchers: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
 }
 
 impl UdpServer {
@@ -41,31 +40,29 @@ impl UdpServer {
         let stop_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
         let socket = Arc::new(UdpSocket::bind(&tunnel.from.addr).await?);
-        let dispatchers = Arc::new(Mutex::new(HashMap::new()));
         let client = TransportClient::new(&tunnel.to, config).await?;
 
         {
             let stop_token = stop_token.clone();
-            let dispatchers = dispatchers.clone();
             let config = config.clone();
 
-            task_tracker.spawn(Self::run(stop_token, socket, dispatchers, client, config));
+            task_tracker.spawn(Self::run(stop_token, socket, client, config));
         }
 
         Ok(Self {
             stop_token,
             task_tracker,
-            dispatchers,
         })
     }
 
     async fn run(
         stop_token: CancellationToken,
         socket: Arc<UdpSocket>,
-        dispatchers: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
         client: TransportClient,
         config: Config,
     ) -> Result<()> {
+        let dispatchers = Arc::new(Mutex::new(HashMap::new()));
+
         loop {
             let mut buf = [0; MAX_DATAGRAM_SIZE];
 
@@ -75,17 +72,21 @@ impl UdpServer {
                 }
                 result = socket.recv_from(&mut buf) => {
                     let (n, addr) = result?;
-                    Self::dispatch_packet(&buf[..n], socket.clone(), addr, dispatchers.clone(), client.clone(), &config);
+                    Self::dispatch(&buf[..n], socket.clone(), addr, dispatchers.clone(), client.clone(), &config);
                 }
             }
         }
 
         client.disconnect().await;
 
+        {
+            dispatchers.lock().unwrap().clear();
+        }
+
         Ok(())
     }
 
-    fn dispatch_packet(
+    fn dispatch(
         buf: &[u8],
         socket: Arc<UdpSocket>,
         peer_addr: SocketAddr,
@@ -101,7 +102,7 @@ impl UdpServer {
             }
         } else {
             let (dispatcher_tx, accept_rx) = unbounded_channel::<Bytes>();
-            let (accept_tx, mut dispatcher_rx) = unbounded_channel::<Bytes>();
+            let (accept_tx, dispatcher_rx) = unbounded_channel::<Bytes>();
 
             dispatcher_tx.send(buf).unwrap();
             dispatchers.insert(peer_addr, dispatcher_tx);
@@ -118,26 +119,40 @@ impl UdpServer {
             tokio::spawn(Self::handle_stream(stream, client));
 
             {
+                let dispatchers = dispatchers_lock.clone();
                 let socket = socket.clone();
-                let dispatchers_lock = dispatchers_lock.clone();
 
-                tokio::spawn(async move {
-                    loop {
-                        match dispatcher_rx.recv().await {
-                            Some(buf) => {
-                                if socket.send_to(&buf, peer_addr).await.is_err() {
-                                    break;
-                                }
-                            }
-                            None => break,
-                        }
-                    }
-
-                    let mut dispatchers = dispatchers_lock.lock().unwrap();
-                    dispatchers.remove(&peer_addr);
-                });
+                tokio::spawn(Self::copy_backward(
+                    dispatchers,
+                    dispatcher_rx,
+                    socket,
+                    peer_addr,
+                ));
             }
         }
+    }
+
+    async fn copy_backward(
+        dispatchers: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
+        mut dispatcher_rx: UnboundedReceiver<Bytes>,
+        socket: Arc<UdpSocket>,
+        peer_addr: SocketAddr,
+    ) -> Result<()> {
+        loop {
+            match dispatcher_rx.recv().await {
+                Some(buf) => {
+                    if socket.send_to(&buf, peer_addr).await.is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        let mut dispatchers = dispatchers.lock().unwrap();
+        dispatchers.remove(&peer_addr);
+
+        Ok(())
     }
 
     async fn handle_stream(
