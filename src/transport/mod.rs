@@ -171,7 +171,7 @@ impl TransportClient {
         match endpoint.transport_type {
             TransportType::Tcp => Ok(TransportClient::TcpClient(TcpClient::new(&endpoint.addr))),
             TransportType::Udp => Ok(TransportClient::UdpClient(
-                UdpClient::new(&endpoint.addr).await?,
+                UdpClient::new(&endpoint.addr, config).await?,
             )),
             TransportType::Quic => Ok(TransportClient::QuicClient(
                 QuicClient::new(&endpoint.addr, config).await?,

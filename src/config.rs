@@ -6,7 +6,7 @@ const QUIC_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const QUIC_STREAM_RECEIVE_WINDOW: u64 = 1024 * 1024 * 2;
 const QUIC_SEND_WINDOW: u64 = QUIC_STREAM_RECEIVE_WINDOW * 8;
 
-const UDP_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const UDP_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct Config {
