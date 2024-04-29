@@ -9,7 +9,6 @@ use futures_util::sink::SinkMapErr;
 use futures_util::stream::{Map, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use sender_sink::wrappers::{SinkError, UnboundedSenderSink};
-use tokio::io::copy_bidirectional;
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -21,8 +20,7 @@ use tokio_util::task::TaskTracker;
 use tokio_util::udp::UdpFramed;
 
 use crate::config::Config;
-use crate::transport::TransportClient;
-use crate::tunnel::Tunnel;
+use crate::tunnel::CopyStream;
 use crate::util::async_read_write::AsyncReadWrite;
 use crate::util::copy_to_udp_frame::CopyToUdpFrame;
 use crate::util::idle_timeout_stream::IdleTimeoutRead;
@@ -36,17 +34,14 @@ pub struct UdpServer {
 }
 
 impl UdpServer {
-    pub async fn start(tunnel: &Tunnel, config: &Config) -> Result<Self> {
+    pub async fn start(addr: &str, copy_stream: CopyStream, config: Config) -> Result<Self> {
         let stop_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
-        let socket = Arc::new(UdpSocket::bind(&tunnel.from.addr).await?);
-        let client = TransportClient::new(&tunnel.to, config).await?;
+        let socket = Arc::new(UdpSocket::bind(addr).await?);
 
         {
             let stop_token = stop_token.clone();
-            let config = config.clone();
-
-            task_tracker.spawn(Self::run(stop_token, socket, client, config));
+            task_tracker.spawn(Self::run(stop_token, socket, copy_stream, config));
         }
 
         Ok(Self {
@@ -58,7 +53,7 @@ impl UdpServer {
     async fn run(
         stop_token: CancellationToken,
         socket: Arc<UdpSocket>,
-        client: TransportClient,
+        copy_stream: CopyStream,
         config: Config,
     ) -> Result<()> {
         let dispatchers = Arc::new(Mutex::new(HashMap::new()));
@@ -72,12 +67,11 @@ impl UdpServer {
                 }
                 result = socket.recv_from(&mut buf) => {
                     let (n, addr) = result?;
-                    Self::dispatch(&buf[..n], socket.clone(), addr, dispatchers.clone(), client.clone(), &config);
+                    let copy_stream= copy_stream.clone();
+                    Self::dispatch(&buf[..n], socket.clone(), addr, dispatchers.clone(), copy_stream, &config);
                 }
             }
         }
-
-        client.disconnect().await;
 
         {
             dispatchers.lock().unwrap().clear();
@@ -91,7 +85,7 @@ impl UdpServer {
         socket: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         dispatchers_lock: Arc<Mutex<HashMap<SocketAddr, UnboundedSender<Bytes>>>>,
-        client: TransportClient,
+        copy_stream: CopyStream,
         config: &Config,
     ) {
         let buf = Bytes::copy_from_slice(buf);
@@ -114,9 +108,11 @@ impl UdpServer {
                 StreamReader::new(UnboundedReceiverStream::from(accept_rx).map(|bytes| Ok(bytes))),
                 config.udp_max_idle_timeout,
             );
-            let stream = UdpServerStream::new(reader, writer);
 
-            tokio::spawn(Self::handle_stream(stream, client));
+            let mut stream = UdpServerStream::new(reader, writer);
+            tokio::spawn(async move {
+                copy_stream.copy(&mut stream).await
+            });
 
             {
                 let dispatchers = dispatchers_lock.clone();
@@ -155,16 +151,6 @@ impl UdpServer {
         Ok(())
     }
 
-    async fn handle_stream(
-        mut stream: AsyncReadWrite<UdpServerStreamReader, UdpServerStreamWriter>,
-        client: TransportClient,
-    ) -> Result<()> {
-        let mut remote_stream = client.connect().await?;
-        copy_bidirectional(&mut stream, &mut remote_stream).await?;
-
-        Ok(())
-    }
-
     pub async fn stop(&self) {
         self.stop_token.cancel();
         self.task_tracker.close();
@@ -191,16 +177,13 @@ pub struct UdpClient {
 }
 
 impl UdpClient {
-    pub async fn new(addr: &str, config: &Config) -> Result<Self> {
+    pub async fn new(addr: &str, config: Config) -> Result<Self> {
         let addr = lookup_host(addr)
             .await?
             .find(|addr| addr.is_ipv4())
             .unwrap();
 
-        Ok(Self {
-            addr,
-            config: config.clone(),
-        })
+        Ok(Self { addr, config })
     }
 
     pub async fn connect(&self) -> Result<UdpClientStream> {

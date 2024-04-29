@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::transport::quic::{QuicClient, QuicServer, QuicStream};
 use crate::transport::tcp::{TcpClient, TcpServer};
 use crate::transport::udp::{UdpClient, UdpClientStream, UdpServer};
-use crate::tunnel::{Tunnel, TunnelEndpoint};
+use crate::tunnel::{CopyStream, TunnelEndpoint};
 
 mod quic;
 mod tcp;
@@ -136,16 +136,20 @@ pub enum TransportServer {
 }
 
 impl TransportServer {
-    pub async fn start(tunnel: &Tunnel, config: &Config) -> Result<Self> {
-        match tunnel.from.transport_type {
+    pub async fn start(
+        endpoint: TunnelEndpoint,
+        copy_stream: CopyStream,
+        config: Config,
+    ) -> Result<Self> {
+        match endpoint.transport_type {
             TransportType::Tcp => Ok(TransportServer::TcpServer(
-                TcpServer::start(tunnel, config).await?,
+                TcpServer::start(&endpoint.addr, copy_stream).await?,
             )),
             TransportType::Udp => Ok(TransportServer::UdpServer(
-                UdpServer::start(tunnel, config).await?,
+                UdpServer::start(&endpoint.addr, copy_stream, config.clone()).await?,
             )),
             TransportType::Quic => Ok(TransportServer::QuicServer(
-                QuicServer::start(tunnel, config).await?,
+                QuicServer::start(&endpoint.addr, copy_stream, config.clone()).await?,
             )),
         }
     }
@@ -167,19 +171,19 @@ pub enum TransportClient {
 }
 
 impl TransportClient {
-    pub async fn new(endpoint: &TunnelEndpoint, config: &Config) -> Result<Self> {
+    pub async fn new(endpoint: TunnelEndpoint, config: Config) -> Result<Self> {
         match endpoint.transport_type {
             TransportType::Tcp => Ok(TransportClient::TcpClient(TcpClient::new(&endpoint.addr))),
             TransportType::Udp => Ok(TransportClient::UdpClient(
-                UdpClient::new(&endpoint.addr, config).await?,
+                UdpClient::new(&endpoint.addr, config.clone()).await?,
             )),
             TransportType::Quic => Ok(TransportClient::QuicClient(
-                QuicClient::new(&endpoint.addr, config).await?,
+                QuicClient::new(&endpoint.addr, config.clone()).await?,
             )),
         }
     }
 
-    async fn connect(&self) -> Result<Transport> {
+    pub async fn connect(&self) -> Result<Transport> {
         match self {
             Self::TcpClient(client) => Ok(Transport::TcpTransport {
                 transport: client.connect().await?,
@@ -193,7 +197,7 @@ impl TransportClient {
         }
     }
 
-    async fn disconnect(&self) {
+    pub async fn disconnect(&self) {
         match self {
             Self::QuicClient(client) => client.disconnect().await,
             _ => {}

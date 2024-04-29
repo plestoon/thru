@@ -1,13 +1,10 @@
-use crate::config::Config;
 use anyhow::Result;
-use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::transport::TransportClient;
-use crate::tunnel::Tunnel;
+use crate::tunnel::CopyStream;
 
 #[derive(Debug)]
 pub struct TcpServer {
@@ -16,15 +13,14 @@ pub struct TcpServer {
 }
 
 impl TcpServer {
-    pub async fn start(tunnel: &Tunnel, config: &Config) -> Result<TcpServer> {
+    pub async fn start(addr: &str, copy_stream: CopyStream) -> Result<TcpServer> {
         let stop_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
-        let listener = TcpListener::bind(&tunnel.from.addr).await?;
-        let client = TransportClient::new(&tunnel.to, &config).await?;
+        let listener = TcpListener::bind(addr).await?;
 
         {
             let stop_token = stop_token.clone();
-            task_tracker.spawn(Self::run(stop_token, listener, client));
+            task_tracker.spawn(Self::run(stop_token, listener, copy_stream));
         }
 
         Ok(TcpServer {
@@ -36,7 +32,7 @@ impl TcpServer {
     async fn run(
         stop_token: CancellationToken,
         listener: TcpListener,
-        client: TransportClient,
+        copy_stream: CopyStream,
     ) -> Result<()> {
         loop {
             select! {
@@ -44,21 +40,14 @@ impl TcpServer {
                     break;
                 }
                 result = listener.accept() => {
-                    let (stream, _) = result?;
-                    let client = client.clone();
-                    tokio::spawn(Self::handle_stream(stream, client));
+                    let (mut stream, _) = result?;
+                    let copy_stream = copy_stream.clone();
+                    tokio::spawn(async move {
+                        copy_stream.copy(&mut stream).await
+                    });
                 }
             }
         }
-
-        client.disconnect().await;
-
-        Ok(())
-    }
-
-    async fn handle_stream(mut stream: TcpStream, client: TransportClient) -> Result<()> {
-        let mut remote_stream = client.connect().await?;
-        copy_bidirectional(&mut stream, &mut remote_stream).await?;
 
         Ok(())
     }

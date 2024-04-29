@@ -8,7 +8,6 @@ use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
     VarInt,
 };
-use tokio::io::copy_bidirectional;
 use tokio::net::lookup_host;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -17,8 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::Config;
-use crate::transport::TransportClient;
-use crate::tunnel::Tunnel;
+use crate::tunnel::CopyStream;
 use crate::util::async_read_write::AsyncReadWrite;
 
 pub type QuicStream = AsyncReadWrite<RecvStream, SendStream>;
@@ -30,7 +28,7 @@ pub struct QuicServer {
 }
 
 impl QuicServer {
-    pub async fn start(tunnel: &Tunnel, app_config: &Config) -> Result<Self> {
+    pub async fn start(addr: &str, copy_stream: CopyStream, app_config: Config) -> Result<Self> {
         let mut reader = BufReader::new(File::open(
             app_config
                 .tls_cert_path
@@ -59,14 +57,13 @@ impl QuicServer {
         );
         transport_config.send_window(app_config.quic_send_window);
         config.transport_config(Arc::new(transport_config));
-        let endpoint = Endpoint::server(config, tunnel.from.addr.parse::<SocketAddr>().unwrap())?;
-        let client = TransportClient::new(&tunnel.to, &app_config).await?;
+        let endpoint = Endpoint::server(config, addr.parse::<SocketAddr>().unwrap())?;
 
         let stop_token = CancellationToken::new();
         let task_tracker = TaskTracker::new();
         {
             let stop_token = stop_token.clone();
-            task_tracker.spawn(Self::run(stop_token, endpoint, client));
+            task_tracker.spawn(Self::run(stop_token, endpoint, copy_stream));
         }
 
         Ok(Self {
@@ -78,7 +75,7 @@ impl QuicServer {
     pub async fn run(
         stop_token: CancellationToken,
         endpoint: Endpoint,
-        client: TransportClient,
+        copy_stream: CopyStream,
     ) -> Result<()> {
         loop {
             select! {
@@ -87,8 +84,8 @@ impl QuicServer {
                 }
                 conn = endpoint.accept() => {
                     let conn = conn.ok_or(anyhow!("not accepting connections"))?.await?;
-                    let client = client.clone();
-                    tokio::spawn(Self::handle_connection(conn, client));
+                    let copy_stream = copy_stream.clone();
+                    tokio::spawn(Self::handle_connection(conn, copy_stream));
                 }
             }
         }
@@ -96,25 +93,18 @@ impl QuicServer {
         endpoint.close(VarInt::from(255u8), b"server stopped");
         endpoint.wait_idle().await;
 
-        client.disconnect().await;
-
         Ok(())
     }
 
-    pub async fn handle_connection(connection: Connection, client: TransportClient) -> Result<()> {
+    pub async fn handle_connection(connection: Connection, copy_stream: CopyStream) -> Result<()> {
         loop {
             let (send, recv) = connection.accept_bi().await?;
-            let stream = QuicStream::new(recv, send);
-            let client = client.clone();
-            tokio::spawn(Self::handle_stream(stream, client));
+            let mut stream = QuicStream::new(recv, send);
+            let copy_stream = copy_stream.clone();
+            tokio::spawn(async move {
+                copy_stream.copy(&mut stream).await
+            });
         }
-    }
-
-    pub async fn handle_stream(mut stream: QuicStream, client: TransportClient) -> Result<()> {
-        let mut remote_stream = client.connect().await?;
-        copy_bidirectional(&mut stream, &mut remote_stream).await?;
-
-        Ok(())
     }
 
     pub async fn stop(&self) {
@@ -131,7 +121,7 @@ pub struct QuicClient {
 }
 
 impl QuicClient {
-    pub async fn new(remote_addr: &str, app_config: &Config) -> Result<Self> {
+    pub async fn new(remote_addr: &str, app_config: Config) -> Result<Self> {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
         let mut config = ClientConfig::with_native_roots();
         let mut transport_config = TransportConfig::default();
@@ -148,7 +138,6 @@ impl QuicClient {
 
         {
             let connection = connection.clone();
-            let app_config = app_config.clone();
             let endpoint = endpoint.clone();
             let remote_addr = remote_addr.to_owned();
 

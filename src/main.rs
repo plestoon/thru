@@ -4,7 +4,6 @@ use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 
 use thru::config::Config;
-use thru::transport::TransportServer;
 use thru::tunnel::{Tunnel, TunnelEndpoint};
 
 #[derive(Parser, Debug)]
@@ -18,32 +17,37 @@ struct Args {
     tls_key_path: Option<String>,
 }
 
-async fn parse_tunnel(arg: &str) -> Result<Tunnel> {
+async fn parse_tunnel_args(arg: &str) -> Result<(TunnelEndpoint, TunnelEndpoint)> {
     let (from, to) = arg
         .split_once("==")
         .ok_or(anyhow!("invalid tunnel: {}", arg))?;
     let from = TunnelEndpoint::try_from(from)?;
     let to = TunnelEndpoint::try_from(to)?;
-    let tunnel = Tunnel::new(from, to);
 
-    Ok(tunnel)
+    Ok((from, to))
+}
+
+async fn shutdown_signal() {
+    let mut sigint = signal(SignalKind::interrupt()).unwrap();
+    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+
+    select! {
+        _ = sigint.recv() => {},
+        _ = sigterm.recv() => {}
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::new(args.tls_cert_path, args.tls_key_path);
-    let tunnel = parse_tunnel(&args.tunnel).await?;
-    let server = TransportServer::start(&tunnel, &config).await?;
 
-    let mut sigint = signal(SignalKind::interrupt()).unwrap();
-    let mut sigterm = signal(SignalKind::terminate()).unwrap();
-    select! {
-        _ = sigint.recv() => {},
-        _ = sigterm.recv() => {}
-    }
+    let (from, to) = parse_tunnel_args(&args.tunnel).await?;
+    let tunnel = Tunnel::open(from, to, config).await?;
 
-    server.stop().await;
+    shutdown_signal().await;
+
+    tunnel.close().await;
 
     Ok(())
 }

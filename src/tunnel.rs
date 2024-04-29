@@ -1,17 +1,31 @@
 use anyhow::{anyhow, Error, Result};
+use tokio::io::{AsyncRead, AsyncWrite, copy_bidirectional};
 use url::Url;
 
-use crate::transport::TransportType;
+use crate::config::Config;
+use crate::transport::{TransportClient, TransportServer, TransportType};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Tunnel {
-    pub from: TunnelEndpoint,
-    pub to: TunnelEndpoint,
+    server: TransportServer,
+    remote_client: TransportClient,
 }
 
 impl Tunnel {
-    pub fn new(from: TunnelEndpoint, to: TunnelEndpoint) -> Self {
-        Self { from, to }
+    pub async fn open(from: TunnelEndpoint, to: TunnelEndpoint, config: Config) -> Result<Self> {
+        let remote_client = TransportClient::new(to, config.clone()).await?;
+        let copy_stream = CopyStream::new(remote_client.clone());
+        let server = TransportServer::start(from, copy_stream, config.clone()).await?;
+
+        Ok(Self {
+            server,
+            remote_client,
+        })
+    }
+
+    pub async fn close(&self)  {
+        self.server.stop().await;
+        self.remote_client.disconnect().await;
     }
 }
 
@@ -39,5 +53,26 @@ impl TryFrom<&str> for TunnelEndpoint {
             transport_type,
             addr,
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct CopyStream {
+    remote_client: TransportClient,
+}
+
+impl CopyStream {
+    pub fn new(remote_client: TransportClient) -> Self {
+        Self { remote_client }
+    }
+
+    pub(crate) async fn copy<T>(&self, stream: &mut T) -> Result<()>
+    where
+        T: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    {
+        let mut remote_stream = self.remote_client.connect().await?;
+        copy_bidirectional(stream, &mut remote_stream).await?;
+
+        Ok(())
     }
 }
