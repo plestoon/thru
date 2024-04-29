@@ -17,7 +17,7 @@ struct Args {
     tls_key_path: Option<String>,
 }
 
-async fn parse_tunnel_args(arg: &str) -> Result<(TunnelEndpoint, TunnelEndpoint)> {
+async fn parse_tunnel_arg(arg: &str) -> Result<(TunnelEndpoint, TunnelEndpoint)> {
     let (from, to) = arg
         .split_once("==")
         .ok_or(anyhow!("invalid tunnel: {}", arg))?;
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::new(args.tls_cert_path, args.tls_key_path);
 
-    let (from, to) = parse_tunnel_args(&args.tunnel).await?;
+    let (from, to) = parse_tunnel_arg(&args.tunnel).await?;
     let tunnel = Tunnel::open(from, to, config).await?;
 
     shutdown_signal().await;
