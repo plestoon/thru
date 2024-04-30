@@ -2,6 +2,10 @@
 
 Create QUIC/TCP/UDP tunnels for one another.
 
+## Install
+
+`cargo install thru`
+
 ## Example usage
 
 TCP through QUIC.
