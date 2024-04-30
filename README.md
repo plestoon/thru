@@ -15,7 +15,7 @@ TCP through QUIC.
 Forward QUIC traffic to tcpbin echo server.
 
 ```shell
-thru -t quic://0.0.0.0:4242==tcp://tcpbin.com:4242 --tls-cert-path cert.pem --tls-key-path key.pem
+thru -t quic://0.0.0.0:4242==tcp://tcpbin.com:4242 --cert cert.pem --key key.pem
 ```
 
 ### Client endpoint
