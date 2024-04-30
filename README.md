@@ -1,4 +1,5 @@
 # Thru
+
 Create QUIC/TCP/UDP tunnels for one another.
 
 ## Example usage
@@ -30,3 +31,6 @@ nc 127.0.0.1 4242
 ## TLS certificate and key
 
 They are only needed for QUIC tunnels.
+
+`--peer-cert` is for the client to specify the server's root certificate. It's only needed for self-signed certificates
+and if it hasn't been installed on the system keystore.

@@ -7,14 +7,22 @@ use thru::config::Config;
 use thru::tunnel::{Tunnel, TunnelEndpoint};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about("https://github.com/plestoon/thru"), long_about = None)]
 struct Args {
+    /// e.g. tcp://127.0.0.1:4242==quic://example.com:4242
     #[arg(short, long)]
     tunnel: String,
+    /// TLS certificate for QUIC server
     #[arg(short = 'c', long)]
-    tls_cert_path: Option<String>,
+    cert: Option<String>,
+    /// TLS private key for QUIC server
     #[arg(short = 'k', long)]
-    tls_key_path: Option<String>,
+    key: Option<String>,
+    /// Server root certificate for QUIC client.
+    /// It's only needed for self-signed certificates
+    /// and if it hasn't been installed on the system keystore.
+    #[arg(short = 'p', long)]
+    peer_cert: Option<String>,
 }
 
 async fn parse_tunnel_arg(arg: &str) -> Result<(TunnelEndpoint, TunnelEndpoint)> {
@@ -40,7 +48,7 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let config = Config::new(args.tls_cert_path, args.tls_key_path);
+    let config = Config::new(args.cert, args.key, args.peer_cert);
 
     let (from, to) = parse_tunnel_arg(&args.tunnel).await?;
     let tunnel = Tunnel::open(from, to, config).await?;

@@ -18,6 +18,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::Config;
 use crate::tunnel::CopyStream;
 use crate::util::async_read_write::AsyncReadWrite;
+use crate::util::tls::load_root_certs;
 
 pub type QuicStream = AsyncReadWrite<RecvStream, SendStream>;
 
@@ -101,9 +102,7 @@ impl QuicServer {
             let (send, recv) = connection.accept_bi().await?;
             let mut stream = QuicStream::new(recv, send);
             let copy_stream = copy_stream.clone();
-            tokio::spawn(async move {
-                copy_stream.copy(&mut stream).await
-            });
+            tokio::spawn(async move { copy_stream.copy(&mut stream).await });
         }
     }
 
@@ -123,7 +122,8 @@ pub struct QuicClient {
 impl QuicClient {
     pub async fn new(remote_addr: &str, app_config: Config) -> Result<Self> {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
-        let mut config = ClientConfig::with_native_roots();
+        let root_certs = load_root_certs(app_config.tls_peer_cert_path.as_ref())?;
+        let mut config = ClientConfig::with_root_certificates(root_certs);
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
