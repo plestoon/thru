@@ -36,20 +36,19 @@ impl QuicServer {
                 .clone()
                 .ok_or(anyhow!("tls cert must be provided"))?,
         )?);
-        let certs = rustls_pemfile::certs(&mut reader)?
+        let cert_chain = rustls_pemfile::certs(&mut reader)
             .into_iter()
-            .map(rustls::Certificate)
-            .collect();
+            .collect::<Result<_, _>>()?;
         let mut reader = BufReader::new(File::open(
             app_config
                 .tls_key_path
                 .clone()
                 .ok_or(anyhow!("tls key must be provided"))?,
         )?);
-        let mut keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
-        let key = rustls::PrivateKey(keys.remove(0));
+        let key =
+            rustls_pemfile::private_key(&mut reader)?.ok_or(anyhow!("invalid private key"))?;
 
-        let mut config = ServerConfig::with_single_cert(certs, key)?;
+        let mut config = ServerConfig::with_single_cert(cert_chain, key)?;
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
@@ -123,7 +122,7 @@ impl QuicClient {
     pub async fn new(remote_addr: &str, app_config: Config) -> Result<Self> {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
         let root_certs = load_root_certs(app_config.tls_peer_cert_path.as_ref())?;
-        let mut config = ClientConfig::with_root_certificates(root_certs);
+        let mut config = ClientConfig::with_root_certificates(Arc::new(root_certs))?;
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
