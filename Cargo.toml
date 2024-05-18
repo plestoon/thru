@@ -1,6 +1,6 @@
 [package]
 name = "thru"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Don Han <plestoon@email.com>"]
 license = "MIT"
 description = "Create QUIC/TCP/UDP tunnels for one another"
