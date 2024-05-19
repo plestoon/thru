@@ -1,6 +1,6 @@
 # Thru
 
-Create QUIC/TCP/UDP tunnels for one another.
+A QUIC tunnel for TCP/UDP.
 
 ## Install
 
@@ -15,7 +15,7 @@ TCP through QUIC.
 Forward QUIC traffic to tcpbin echo server.
 
 ```shell
-thru -t quic://0.0.0.0:4242==tcp://tcpbin.com:4242 --cert cert.pem --key key.pem
+thru -t quic://0.0.0.0:4242==tcp://tcpbin.com:4242 --cert certchain.pem --key key.pem
 ```
 
 ### Client endpoint
@@ -23,7 +23,7 @@ thru -t quic://0.0.0.0:4242==tcp://tcpbin.com:4242 --cert cert.pem --key key.pem
 Forward TCP tranffic to QUIC tunnel.
 
 ```shell
-thru -t tcp://127.0.0.1:4242==quic://example.com:4242
+thru -t tcp://127.0.0.1:4242==quic://example.com:4242 --peer-cert root.pem
 ```
 
 ### Echo client
@@ -32,9 +32,7 @@ thru -t tcp://127.0.0.1:4242==quic://example.com:4242
 nc 127.0.0.1 4242
 ```
 
-## TLS certificate and key
+## TLS certificate
 
-They are only needed for QUIC tunnels.
-
-`--peer-cert` is for the client to specify the server's root certificate. It's only needed for self-signed certificates
-and if it hasn't been installed on the system keystore.
+On the client side, `--peer-cert` is for the client to specify the server's root certificate.
+It's only needed for self-signed certificates and if it hasn't been installed on the system keystore.
