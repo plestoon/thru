@@ -8,7 +8,7 @@ use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
     VarInt,
 };
-use tokio::io::{Join, join};
+use tokio::io::{join, Join};
 use tokio::net::lookup_host;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -121,8 +121,12 @@ pub struct QuicClient {
 impl QuicClient {
     pub async fn new(remote_addr: &str, app_config: Config) -> Result<Self> {
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse::<SocketAddr>().unwrap())?;
-        let root_certs = load_root_certs(app_config.tls_peer_cert_path.as_ref())?;
-        let mut config = ClientConfig::with_root_certificates(Arc::new(root_certs))?;
+        let mut config = if let Some(cert) = app_config.tls_peer_cert_path.as_ref() {
+            let root_certs = load_root_certs(cert)?;
+            ClientConfig::with_root_certificates(Arc::new(root_certs))?
+        } else {
+            ClientConfig::with_platform_verifier()
+        };
         let mut transport_config = TransportConfig::default();
         transport_config.max_idle_timeout(Some(app_config.quic_max_idle_timeout.try_into()?));
         transport_config.keep_alive_interval(Some(app_config.quic_keep_alive_interval));
