@@ -5,10 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use bytes::{Bytes, BytesMut};
+use futures_util::{SinkExt, StreamExt};
 use futures_util::sink::SinkMapErr;
 use futures_util::stream::{Map, SplitSink};
-use futures_util::{SinkExt, StreamExt};
 use sender_sink::wrappers::{SinkError, UnboundedSenderSink};
+use tokio::io::{Join, join};
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -21,7 +22,6 @@ use tokio_util::udp::UdpFramed;
 
 use crate::config::Config;
 use crate::tunnel::CopyStream;
-use crate::util::async_read_write::AsyncReadWrite;
 use crate::util::copy_to_udp_frame::CopyToUdpFrame;
 use crate::util::idle_timeout_stream::IdleTimeoutRead;
 
@@ -109,7 +109,7 @@ impl UdpServer {
                 config.udp_max_idle_timeout,
             );
 
-            let mut stream = UdpServerStream::new(reader, writer);
+            let mut stream = join(reader, writer);
             tokio::spawn(async move {
                 copy_stream.copy(&mut stream).await
             });
@@ -168,8 +168,6 @@ type UdpServerStreamReader = IdleTimeoutRead<
     >,
 >;
 
-type UdpServerStream = AsyncReadWrite<UdpServerStreamReader, UdpServerStreamWriter>;
-
 #[derive(Debug, Clone)]
 pub struct UdpClient {
     addr: SocketAddr,
@@ -196,7 +194,7 @@ impl UdpClient {
             self.config.udp_max_idle_timeout,
         );
 
-        Ok(UdpClientStream::new(reader, writer))
+        Ok(join(reader, writer))
     }
 }
 
@@ -212,4 +210,4 @@ type UdpClientStreamReader = IdleTimeoutRead<
     >,
 >;
 
-pub type UdpClientStream = AsyncReadWrite<UdpClientStreamReader, UdpClientStreamWriter>;
+pub type UdpClientStream = Join<UdpClientStreamReader, UdpClientStreamWriter>;

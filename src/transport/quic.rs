@@ -8,6 +8,7 @@ use quinn::{
     ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig, TransportConfig,
     VarInt,
 };
+use tokio::io::{Join, join};
 use tokio::net::lookup_host;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -17,10 +18,9 @@ use tokio_util::task::TaskTracker;
 
 use crate::config::Config;
 use crate::tunnel::CopyStream;
-use crate::util::async_read_write::AsyncReadWrite;
 use crate::util::tls::load_root_certs;
 
-pub type QuicStream = AsyncReadWrite<RecvStream, SendStream>;
+pub type QuicStream = Join<RecvStream, SendStream>;
 
 #[derive(Debug)]
 pub struct QuicServer {
@@ -99,7 +99,7 @@ impl QuicServer {
     pub async fn handle_connection(connection: Connection, copy_stream: CopyStream) -> Result<()> {
         loop {
             let (send, recv) = connection.accept_bi().await?;
-            let mut stream = QuicStream::new(recv, send);
+            let mut stream = join(recv, send);
             let copy_stream = copy_stream.clone();
             tokio::spawn(async move { copy_stream.copy(&mut stream).await });
         }
@@ -212,7 +212,7 @@ impl QuicClient {
         let connection = connection.ok_or(anyhow!("connection not established"))?;
         let (send, recv) = connection.open_bi().await?;
 
-        Ok(QuicStream::new(recv, send))
+        Ok(join(recv, send))
     }
 
     pub async fn disconnect(&self) {
