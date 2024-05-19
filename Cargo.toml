@@ -19,7 +19,7 @@ clap = { version = "4.5.2", features = ["derive"] }
 futures-util = { version = "0.3.30", features = ["futures-sink"] }
 pin-project-lite = "0.2.13"
 quinn = { version = "0.11.0", features = ["ring"] }
-rustls = "0.23.5"
+rustls = { version = "0.23.5", features = ["ring"] }
 rustls-pemfile = "2.1.2"
 sender-sink = "0.2.1"
 tokio = { version = "1.36.0", features = ["full"] }

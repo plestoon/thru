@@ -47,6 +47,8 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider().install_default().unwrap();
+
     let args = Args::parse();
     let config = Config::new(args.cert, args.key, args.peer_cert);
 
